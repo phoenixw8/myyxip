@@ -1,0 +1,59 @@
+# 工作流名称
+name: Auto Update Cloudflare IPs
+
+# 触发条件
+on:
+  # 1. 定时触发：使用 cron 语法，'0 * * * *' 表示每小时的第0分钟执行
+  schedule:
+    - cron: '0 * * * *'
+  # 2. 手动触发：允许你在 GitHub Actions 页面手动点击运行
+  workflow_dispatch:
+
+jobs:
+  # 定义一个名为 'build' 的任务
+  build:
+    # 任务运行的环境
+    runs-on: ubuntu-latest
+
+    # 任务步骤
+    steps:
+      # 第一步：检出你的仓库代码
+      # 这样工作流才能访问你的 update_ips.py 文件
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 第二步：设置 Python 环境
+      # 使用 Python 3.9，你也可以选择其他版本
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+
+      # 第三步：安装 Python 脚本所需的依赖库
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests
+
+      # 第四步：运行你的 Python 脚本
+      # 这会生成 cloudflare_ips.txt 文件
+      - name: Run IP updater script
+        run: python update_ips.py
+
+      # 第五步：提交并推送文件更改
+      - name: Commit and push changes
+        run: |
+          # 配置 git 用户信息
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          
+          # 将所有更改添加到暂存区
+          git add -A
+          
+          # 检查是否有文件变动。如果没有变动，则不进行提交，避免产生空的 commit
+          # 'git diff --staged --quiet' 如果没有变动，命令会成功退出 (exit code 0)
+          # '||' 表示如果前一个命令失败 (有变动)，则执行后面的命令
+          git diff --staged --quiet || git commit -m "CI: Auto-update Cloudflare IPs"
+          
+          # 将提交推送到远程仓库
+          git push
