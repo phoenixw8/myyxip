@@ -1,59 +1,77 @@
-# 工作流名称
-name: Auto Update Cloudflare IPs
+import requests
+import re
+import json
+from collections import OrderedDict
 
-# 触发条件
-on:
-  # 1. 定时触发：使用 cron 语法，'0 * * * *' 表示每小时的第0分钟执行
-  schedule:
-    - cron: '0 * * * *'
-  # 2. 手动触发：允许你在 GitHub Actions 页面手动点击运行
-  workflow_dispatch:
+# --- 配置 ---
+SOURCE_URL = "https://api.uouin.com/cloudflare.html"
+OUTPUT_FILE = "cloudflare_ips.txt"
+# 使用免费的 IP-API 进行地理位置查询
+GEO_API_URL = "http://ip-api.com/json/"
 
-jobs:
-  # 定义一个名为 'build' 的任务
-  build:
-    # 任务运行的环境
-    runs-on: ubuntu-latest
+def get_geo_info(ip):
+    """根据IP地址查询国家和国家代码"""
+    try:
+        response = requests.get(f"{GEO_API_URL}{ip}?lang=zh-CN&fields=country,countryCode")
+        response.raise_for_status()
+        data = response.json()
+        if data.get('countryCode') and data.get('country'):
+            return data['countryCode'], data['country']
+    except requests.exceptions.RequestException as e:
+        print(f"Error querying geo info for {ip}: {e}")
+    except json.JSONDecodeError:
+        print(f"Error decoding JSON for {ip}")
+    return None, None
 
-    # 任务步骤
-    steps:
-      # 第一步：检出你的仓库代码
-      # 这样工作流才能访问你的 update_ips.py 文件
-      - name: Checkout repository
-        uses: actions/checkout@v4
+def country_code_to_flag(code):
+    """将两位国家代码转换为国旗 emoji"""
+    if not code or len(code) != 2:
+        return "❓"
+    return "".join(chr(ord(char) - ord('A') + 0x1F1E6) for char in code.upper())
 
-      # 第二步：设置 Python 环境
-      # 使用 Python 3.9，你也可以选择其他版本
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.9'
+def main():
+    """主函数"""
+    print("Starting IP collection process...")
+    
+    try:
+        print(f"Fetching IPs from {SOURCE_URL}...")
+        response = requests.get(SOURCE_URL, timeout=15)
+        response.raise_for_status()
+        content = response.text
+    except requests.exceptions.RequestException as e:
+        print(f"Failed to fetch source URL: {e}")
+        return
 
-      # 第三步：安装 Python 脚本所需的依赖库
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install requests
+    ipv4_pattern = re.compile(r'\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b')
+    ips = ipv4_pattern.findall(content)
+    unique_ips = list(OrderedDict.fromkeys(ips))
+    
+    if not unique_ips:
+        print("No IPs found. Exiting.")
+        return
+        
+    print(f"Found {len(unique_ips)} unique IPs. Now fetching geo information...")
+    
+    formatted_lines = []
+    for i, ip in enumerate(unique_ips, 1):
+        country_code, country_name = get_geo_info(ip)
+        if country_code and country_name:
+            flag = country_code_to_flag(country_code)
+            line = f"{ip}#{flag} {country_name}"
+            print(f"({i}/{len(unique_ips)}) Processed: {line}")
+            formatted_lines.append(line)
+        else:
+            line = f"{ip}#❓ 未知"
+            print(f"({i}/{len(unique_ips)}) Failed to get geo for {ip}. Using default.")
+            formatted_lines.append(line)
 
-      # 第四步：运行你的 Python 脚本
-      # 这会生成 cloudflare_ips.txt 文件
-      - name: Run IP updater script
-        run: python update_ips.py
+    print(f"Writing {len(formatted_lines)} lines to {OUTPUT_FILE}...")
+    try:
+        with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+            f.write("\n".join(formatted_lines))
+        print("Process completed successfully!")
+    except IOError as e:
+        print(f"Failed to write to file: {e}")
 
-      # 第五步：提交并推送文件更改
-      - name: Commit and push changes
-        run: |
-          # 配置 git 用户信息
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-          
-          # 将所有更改添加到暂存区
-          git add -A
-          
-          # 检查是否有文件变动。如果没有变动，则不进行提交，避免产生空的 commit
-          # 'git diff --staged --quiet' 如果没有变动，命令会成功退出 (exit code 0)
-          # '||' 表示如果前一个命令失败 (有变动)，则执行后面的命令
-          git diff --staged --quiet || git commit -m "CI: Auto-update Cloudflare IPs"
-          
-          # 将提交推送到远程仓库
-          git push
+if __name__ == "__main__":
+    main()
